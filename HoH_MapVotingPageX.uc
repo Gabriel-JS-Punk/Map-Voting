@@ -221,7 +221,13 @@ function bool AlignBK(Canvas C)
 		i_MapListBackground.WinLeft  	= lb_MapListBox.MyList.ActualLeft();
 		i_MapListBackground.WinTop	 	= lb_MapListBox.MyList.ActualTop();
 	}
+
 	return false;
+}
+function SendRandomVote()
+{
+    if (MVRI != None)
+        HoH_VotingReplicationInfo(MVRI).SendMapVote(-2, -1); // -2 = "Random Map"
 }
 
 

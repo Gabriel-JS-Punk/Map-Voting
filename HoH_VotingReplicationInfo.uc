@@ -9,17 +9,15 @@ var sound AnnounceSnds[13];
 var byte MapRepVote;
 var bool bClientHasInit;
 var bool bShowMapLike;
-var bool bRandomVote;      // Si el jugador votó por Random
-var int RandomVoteCount;   // Contador de votos random
 
 replication
 {
 	reliable if( Role==ROLE_Authority && bNetInitial )
 		bShowMapLike;
 	reliable if( Role==ROLE_Authority )
-		ReceiveMapInfoRep, bRandomVote, RandomVoteCount;
+		ReceiveMapInfoRep;
 	reliable if( Role<ROLE_Authority )
-		SendMapRepVote, SendRandomVote;
+		SendMapRepVote;
 }
 simulated final function InitClient()
 {
@@ -145,46 +143,8 @@ function SendMapRepVote(byte value)
 {
 	MapRepVote = value;
 }
-function SendRandomVote()
-{
-    // Similar a SendMapVote en el código original
-    if(VH != None)
-    {
-        HoH_VotingHandler(VH).SubmitRandomVote(Owner);
-    }
-}
-// Función para recibir actualizaciones de votos random
-simulated function ReceiveRandomVoteCount(int NewCount)
-{
-    RandomVoteCount = NewCount;
-
-    // Actualizar la UI si está abierta
-    if(PlayerOwner != None && PlayerOwner.Player != None)
-    {
-        if(HoH_MapVotingPageX(GetController().ActivePage) != None)
-        {
-            HoH_MapVotingPageX(GetController().ActivePage).UpdateRandomVoteCount(RandomVoteCount);
-        }
-    }
-}
-// Función para verificar si el jugador puede votar random
-simulated function bool CanVoteRandom()
-{
-    // No permitir voto random si ya votó por un mapa
-    if(MapVote != -1)
-        return false;
-
-    // No permitir voto random si ya votó random
-    if(bRandomVote)
-        return false;
-
-    return true;
-}
 defaultproperties
 {
-    bRandomVote=false
-    RandomVoteCount=0	
-	
     AnnounceSnds[0]=Sound'KFAnnounc.one'
     AnnounceSnds[1]=Sound'KFAnnounc.two'
     AnnounceSnds[2]=Sound'KFAnnounc.three'

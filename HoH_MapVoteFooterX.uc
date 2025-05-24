@@ -11,8 +11,6 @@ function InitComponent(GUIController InController, GUIComponent InOwner)
     
     Super(GUIFooter).InitComponent(InController, InOwner);
     
-	b_Random.OnClick = InternalOnClickRandom;
-	
     // Intentamos establecer el color verde directamente
     if(ed_Chat != None)
     {
@@ -78,7 +76,7 @@ function bool MyOnDraw(canvas C)
     b_Accept.WinLeft  = l;
     ed_Chat.WinLeft   = sb_Background.ActualLeft() + sb_Background.ImageOffset[0];
     ed_Chat.WinWidth  = L - ed_Chat.WinLeft;
-    ed_Chat.WinHeight = 45;
+    ed_Chat.WinHeight = 25;
     ed_Chat.WinTop    = t;
 
     return false;
@@ -124,39 +122,26 @@ delegate bool OnSendChat( string Text )
 	}
 	return true;
 }
-function bool InternalOnClickRandom(GUIComponent Sender)
+function bool InternalOnClick(GUIComponent Sender)
 {
-    local PlayerController PC;
-    local HoH_MapVotingPageX VotingPage;
-    local HoH_VotingHandler VH;
-
-    PC = PlayerOwner();
-    if (PC == None || PC.VoteReplicationInfo == None)
-        return false;
-
-    // Obtener el voting handler existente y enviar el voto random
-    foreach PC.Level.AllActors(class'HoH_VotingHandler', VH)
+    if (Sender == b_Random)
     {
-        if (VH != None)
-        {
-            VH.SubmitRandomVote(PC);
-            break;  // Solo necesitamos el primer VotingHandler válido
-        }
+        HoH_MapVotingPageX(MenuOwner).SendRandomVote();
+        return true;
     }
-
-    // Actualizar la UI de votación
-    VotingPage = HoH_MapVotingPageX(Controller.FindMenuByClass(class'HoH_MapVotingPageX'));
-    if (VotingPage != None)
-    {
-        VotingPage.UpdateVoteDisplay();
-    }
-
-    return true;
+    return Super.InternalOnClick(Sender);
 }
 defaultproperties
 {
     strLiked="Liked the current map"
     stdDisliked="Disliked the current map"
+
+    Begin Object Class=GUIButton Name=RandomButton
+        StyleName="SquareButton"
+        Caption="Random"
+        OnClick=MapVoteFooter.InternalOnClick
+    End Object
+    b_Random=RandomButton
 
     Begin Object Class=AltSectionBackground Name=MapvoteFooterBackground
         bAltCaption=false
@@ -194,18 +179,11 @@ defaultproperties
         //Caption="F2 Say"
         OnCreateComponent=ChatEditbox.InternalOnCreateComponent
         WinTop=0.8685980
-        WinLeft=0.0712350
+        WinLeft=0.0072350
         WinWidth=0.8002430
         WinHeight=0.1066090
         TabOrder=0
         OnKeyEvent=MapVoteFooter.InternalOnKeyEvent
     End Object
     ed_Chat=moEditBox'HoH_Game.HoH_MapVoteFooterX.ChatEditbox'
-	
-    Begin Object Class=GUIButton Name=RandomButton
-        StyleName="SquareButton"
-        Caption="Random"
-        OnClick=MapVoteFooter.InternalOnClick
-    End Object
-    b_Random=RandomButton
 }

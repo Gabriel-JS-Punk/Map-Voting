@@ -3,15 +3,17 @@ class HoH_VotingHandler extends xVotingHandler
 
 var config bool bShowMapLike;
 var config bool bSpectatorsCanVote;
-var int RandomVoteCount;  // Para mantener el conteo de votos random
-var array<int> RandomVoteIndices; // Para trackear quién votó random
-
+var int RandomVoteCount;
 struct FMapRepType
 {
 	var int Positive,Negative;
 };
 var array<FMapRepType> RepArray; // Map reputation array, should be in sync with MapList array.
-
+replication
+{
+    reliable if (Role == ROLE_Authority)
+        RandomVoteCount;
+}
 function PostBeginPlay()
 {
 	local int i;
@@ -91,6 +93,37 @@ function SubmitMapVote(int MapIndex, int GameIndex, Actor Voter)
 	PC    = PlayerController(Voter);
 	PRI   = PC.PlayerReplicationInfo;
 	Index = GetMVRIIndex(PC);
+	
+	// ========== NUEVO: Si es un voto por "Random Map"
+	if (MapIndex == -2)
+	{
+		// Ya votó random
+		if (MVRI[Index].MapVote == -2)
+			return;
+
+		PrevMapVote = MVRI[Index].MapVote;
+		PrevGameVote = MVRI[Index].GameVote;
+
+		MVRI[Index].MapVote = -2;
+		MVRI[Index].GameVote = -1;
+
+		VoteCount = 1;
+
+		if (PrevMapVote > -1 && PrevGameVote > -1)
+			UpdateVoteCount(PrevMapVote, PrevGameVote, -MVRI[Index].VoteCount);
+
+		MVRI[Index].VoteCount = VoteCount;
+
+		// ✅ Mostrar "Random Map"
+		TextMessage = lmsgMapVotedFor;
+		TextMessage = repl(TextMessage, "%playername%", PRI.PlayerName);
+		TextMessage = repl(TextMessage, "%mapname%", "Random Map");
+		Level.Game.Broadcast(self, TextMessage);
+
+		TallyVotes(false);
+		return;
+	}	
+	
 	if( GameIndex<0 )
 	{
 		bAdminForce = true;
@@ -179,17 +212,69 @@ function SubmitMapVote(int MapIndex, int GameIndex, Actor Voter)
 	MVRI[Index].VoteCount = VoteCount;
 	TallyVotes(false);
 }
+// ==========================================================================================
+
+
+// =====================================================
 function TallyVotes(bool bForceMapSwitch)
 {
-	local int C;
+	local int i, C, RandomVotes, topVotes, mapidx, gameidx;
+	local bool bRandomWins;
+	local MapHistoryInfo MapInfo;
 
-	if (!bSpectatorsCanVote) 		super.TallyVotes(bForceMapSwitch);
+	// Contar votos aleatorios
+	for (i = 0; i < MVRI.Length; i++)
+	{
+		if (MVRI[i] != None && MVRI[i].MapVote == -2)
+			RandomVotes += MVRI[i].VoteCount;
+	}
+
+	// Calcular el voto más alto de todos los votos normales
+	topVotes = 0;
+	for (i = 0; i < MVRI.Length; i++)
+	{
+		if (MVRI[i] != None && MVRI[i].MapVote > -1 && MVRI[i].GameVote > -1)
+		{
+			if (MVRI[i].VoteCount > topVotes)
+				topVotes = MVRI[i].VoteCount;
+		}
+	}
+
+	// Verificar si "Random Map" gana
+	bRandomWins = (RandomVotes > topVotes);
+
+	// Si gana "Random Map"
+	if (bRandomWins)
+	{
+		GetDefaultMap(mapidx, gameidx);
+
+		TextMessage = lmsgMapWon;
+		TextMessage = Repl(TextMessage, "%mapname%", "Random Map: " $ MapList[mapidx].MapName);
+		Level.Game.Broadcast(self, TextMessage);
+
+		CloseAllVoteWindows();
+
+		MapInfo = History.PlayMap(MapList[mapidx].MapName);
+		ServerTravelString = SetupGameMap(MapList[mapidx], gameidx, MapInfo);
+		Level.ServerTravel(ServerTravelString, false);
+
+		bLevelSwitchPending = true;
+		SetTimer(1, true);
+		return; // 💡 no continuar con el super
+	}
+
+	// Si no ganó "Random", seguir normal
+	if (!bSpectatorsCanVote)
+		super.TallyVotes(bForceMapSwitch);
 
 	C = Level.Game.NumPlayers;
-	Level.Game.NumPlayers+=Level.Game.NumSpectators;
-	Super.TallyVotes(bForceMapSwitch);
+	Level.Game.NumPlayers += Level.Game.NumSpectators;
+	super.TallyVotes(bForceMapSwitch);
 	Level.Game.NumPlayers = C;
 }
+
+
+
 function AddMapVoteReplicationInfo(PlayerController Player)
 {
 	local HoH_VotingReplicationInfo M;
@@ -296,7 +381,7 @@ function AddMap(string MapName, string Mutators, string GameOptions) // called f
 	if( Right(MapName,4)~=".rom" ) MapName = Left(MapName,Len(MapName)-4);
 
 	if( MapName~="KFintro" ) return; // Unplayable map.
-	if( MapName~="KF-Menu" ) return; // Unplayable map.
+	if( MapName~="KF-Menu" ) return; // Unplayable map.	
 
 	for(i=0; i < MapList.Length; i++)  // dont add duplicate map names
 		if(MapName ~= MapList[i].MapName)
@@ -362,53 +447,37 @@ function CloseAllVoteWindows()
 	if( Pos!=0 || Neg!=0 )
 		Class'HoH_MapRepHistory'.Static.AddReputation(string(Outer.Name),Pos,Neg);
 }
+// Fixed a bug in vote count updater.
 function PlayerExit(Controller Exiting)
 {
     local int i;
-    local HoH_VotingReplicationInfo H;
 
-    // disable voting in single player mode
-    if( Level.NetMode == NM_StandAlone )
-        return;
+    if (Level.NetMode == NM_StandAlone) return;
 
-    log("____PlayerExit", 'MapVoteDebug');
-    if( bMapVote || bKickVote || bMatchSetup )
+    if (bMapVote || bKickVote || bMatchSetup)
     {
-        // find the MVRI belonging to the exiting player
-        for(i=0;i < MVRI.Length;i++)
+        for (i = 0; i < MVRI.Length; i++)
         {
-            // remove players vote from vote count
-            if( MVRI[i] != none && (MVRI[i].PlayerOwner == none || MVRI[i].PlayerOwner == Exiting) )
+            if (MVRI[i] != none && (MVRI[i].PlayerOwner == none || MVRI[i].PlayerOwner == Exiting))
             {
-                log("exiting player MVRI found " $ i,'MapVoteDebug');
-                if( bMapVote && MVRI[i].MapVote > -1 && MVRI[i].GameVote > -1 )
+                if (bMapVote && MVRI[i].MapVote > -1 && MVRI[i].GameVote > -1)
                     UpdateVoteCount(MVRI[i].MapVote, MVRI[i].GameVote, -MVRI[i].VoteCount);
+                else if (bMapVote && MVRI[i].MapVote == -2)
+                    RandomVoteCount -= MVRI[i].VoteCount;
 
-                // Manejar el voto random si existe
-                H = HoH_VotingReplicationInfo(MVRI[i]);
-                if( H != None && H.bRandomVote )
+                // Resto del código original...
+                if (bKickVote)
                 {
-                    RandomVoteCount--;
-                    // Actualizar el conteo en todos los clientes usando la función existente
-                    for(i = 0; i < MVRI.Length; i++)
-                        if(MVRI[i] != None)
-                            HoH_VotingReplicationInfo(MVRI[i]).ReceiveRandomVoteCount(RandomVoteCount);
+                    if (MVRI[i].KickVote > -1)
+                        UpdateKickVoteCount(MVRI[MVRI[i].KickVote].PlayerID, -1);
+                    UpdateKickVoteCount(MVRI[i].PlayerID, 0);
                 }
 
-                if( bKickVote )
-                {
-                    // decrease votecount for player that the exiting player voted against
-                    if( MVRI[i].KickVote>-1 )
-                        UpdateKickVoteCount( MVRI[MVRI[i].KickVote].PlayerID, -1);
-
-                    // clear votes for exiting player
-                    UpdateKickVoteCount( MVRI[i].PlayerID, 0 );
-                }
-                log("___Destroying VRI...",'MapVoteDebug');
                 MVRI[i].Destroy();
                 MVRI[i] = none;
-                if( bKickVote )        TallyKickVotes();
-                if( bMapVote )        TallyVotes(false);
+
+                if (bKickVote) TallyKickVotes();
+                if (bMapVote) TallyVotes(false);
             }
         }
     }
@@ -657,74 +726,4 @@ function UpdateConfigArrayItem(string ConfigArrayName, int RowIndex, int ColumnI
 				break;
 		}
 	}
-}
-var int RandomVoteCount;  // Para mantener el conteo de votos random
-var array<int> RandomVoteIndices; // Para trackear quién votó random
-
-function SubmitRandomVote(Actor Voter)
-{
-    local int Index, PrevMapVote, PrevGameVote;
-    local PlayerController PC;
-    local PlayerReplicationInfo PRI;
-    
-    if(bLevelSwitchPending)
-        return;
-        
-    PC = PlayerController(Voter);
-    if(PC == None)
-        return;
-        
-    PRI = PC.PlayerReplicationInfo;
-    Index = GetMVRIIndex(PC);
-    
-    // Verificar si el jugador puede votar
-    if(!bSpectatorsCanVote && PRI.bOnlySpectator && Level.Game.NumPlayers > 0)
-    {
-        // Los espectadores no pueden votar si bSpectatorsCanVote es false
-        return;
-    }
-    
-    // Si el jugador ya votó random, no permitir otro voto
-    if(RandomVoteIndices.Find(Index) != -1)
-        return;
-        
-    log("___" $ Index $ " - " $ PRI.PlayerName $ " voted for Random",'MapVote');
-    
-    // Guardar los votos previos para cancelarlos si existen
-    PrevMapVote = MVRI[Index].MapVote;
-    PrevGameVote = MVRI[Index].GameVote;
-    
-    // Limpiar votos previos si existían
-    if(PrevMapVote > -1 && PrevGameVote > -1)
-    {
-        UpdateVoteCount(PrevMapVote, PrevGameVote, -MVRI[Index].VoteCount);
-    }
-    
-    // Marcar el voto random
-    RandomVoteIndices[RandomVoteIndices.Length] = Index;
-    RandomVoteCount++;
-    
-    // Actualizar el estado de voto en el MVRI
-    HoH_VotingReplicationInfo(MVRI[Index]).bRandomVote = true;
-    HoH_VotingReplicationInfo(MVRI[Index]).RandomVoteCount = RandomVoteCount;
-    
-    // Actualizar el conteo en todos los clientes
-    UpdateRandomVoteCountAll();
-    
-    // Verificar si es necesario forzar el cambio de mapa
-    TallyVotes(false);
-}
-
-// Función para actualizar el conteo de votos random en todos los clientes
-function UpdateRandomVoteCountAll()
-{
-    local int i;
-    
-    for(i = 0; i < MVRI.Length; i++)
-    {
-        if(MVRI[i] != None && HoH_VotingReplicationInfo(MVRI[i]) != None)
-        {
-            HoH_VotingReplicationInfo(MVRI[i]).ReceiveRandomVoteCount(RandomVoteCount);
-        }
-    }
 }
